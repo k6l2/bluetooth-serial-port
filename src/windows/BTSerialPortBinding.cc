@@ -8,6 +8,7 @@
 #include <winsock2.h>
 #include <ws2bth.h>
 #include <string>
+#include <sstream>
 #include <stdlib.h>
 #include "../BluetoothException.h"
 #include "../BTSerialPortBinding.h"
@@ -39,6 +40,7 @@ BTSerialPortBinding *BTSerialPortBinding::Create(string address, int channelID)
 
 BTSerialPortBinding::BTSerialPortBinding(string address, int channelID)
 	: address(address), channelID(channelID), data(new bluetooth_data())
+	, timeoutRead(nullptr)
 {
 	data->s = INVALID_SOCKET;
 	data->initialized = BluetoothHelpers::Initialize();
@@ -124,26 +126,34 @@ int BTSerialPortBinding::Read(char *buffer, int length)
 
 	int size = -1;
 
-	//timeval timeout { 0, 0 };
 	const int iResult = select(
-		static_cast<int>(data->s) + 1, &set, nullptr, nullptr, nullptr/*&timeout*/);
+		static_cast<int>(data->s) + 1, &set, nullptr, nullptr, timeoutRead);
 	if (iResult == SOCKET_ERROR)
 	{
 		const int socketError = WSAGetLastError();
-		throw BluetoothException("socket error!");
+		std::stringstream ss;
+		ss << "Socket error =" << socketError;
 		Close();
+		throw BluetoothException(ss.str());
 	}
 	if (iResult == 0)
 	{
-		throw BluetoothException("time limit expired!");
+		// if a timeout occurs, we consider the connection to be closed //
 		Close();
+		throw BluetoothException("time limit expired!");
 	}
 	else
 	{
 		if (FD_ISSET(data->s, &set))
+		{
 			size = recv(data->s, buffer, length, 0);
-		else // when no data is read from rfcomm the connection has been closed.
-			size = 0; // TODO: throw ?
+		}
+		else 
+		{
+			// when no data is read from rfcomm the connection has been closed.
+			size = 0;
+			Close();
+		}
 	}
 
 	if (size < 0)
@@ -176,6 +186,8 @@ bool BTSerialPortBinding::IsDataAvailable()
 	int iResult = ioctlsocket(data->s, FIONREAD, &count);
 	if (iResult != NO_ERROR)
 	{
+		// invalidate the socket so the user can re-open it //
+		Close();
 		switch (iResult)
 		{
 		case WSANOTINITIALISED:
@@ -195,14 +207,21 @@ bool BTSerialPortBinding::IsDataAvailable()
 			throw BluetoothException("CRITICAL: count variable address invalid!");
 			break;
 		}
-		// invalidate the socket so the user can re-open it //
-		Close();
 	}
 	return count > 0;
 }
-
-//void BTSerialPortBinding::SetTimeouts(int readTimeout, int writeTimeout)
-//{
-//	this->readTimeout = readTimeout;
-//	this->writeTimeout = writeTimeout;
-//}
+void BTSerialPortBinding::setTimoutRead(long seconds, long microSeconds)
+{
+	if (timeoutRead)
+	{
+		delete timeoutRead;
+		timeoutRead = nullptr;
+	}
+	if (seconds < 0 || microSeconds < 0)
+	{
+		return;
+	}
+	timeoutRead = new timeval;
+	timeoutRead->tv_sec  = seconds;
+	timeoutRead->tv_usec = microSeconds;
+}
