@@ -125,8 +125,20 @@ int BTSerialPortBinding::Read(char *buffer, int length)
 	int size = -1;
 
 	//timeval timeout { 0, 0 };
-
-	if (select(static_cast<int>(data->s) + 1, &set, nullptr, nullptr, nullptr/*&timeout*/) >= 0)
+	const int iResult = select(
+		static_cast<int>(data->s) + 1, &set, nullptr, nullptr, nullptr/*&timeout*/);
+	if (iResult == SOCKET_ERROR)
+	{
+		const int socketError = WSAGetLastError();
+		throw BluetoothException("socket error!");
+		Close();
+	}
+	if (iResult == 0)
+	{
+		throw BluetoothException("time limit expired!");
+		Close();
+	}
+	else
 	{
 		if (FD_ISSET(data->s, &set))
 			size = recv(data->s, buffer, length, 0);
@@ -161,7 +173,31 @@ bool BTSerialPortBinding::IsDataAvailable()
 		throw BluetoothException("connection has been closed");
 
 	u_long count;
-	ioctlsocket(data->s, FIONREAD, &count);
+	int iResult = ioctlsocket(data->s, FIONREAD, &count);
+	if (iResult != NO_ERROR)
+	{
+		switch (iResult)
+		{
+		case WSANOTINITIALISED:
+			data->initialized = false;
+			throw BluetoothException("bluetooth not initialized!");
+			break;
+		case WSAENETDOWN:
+			throw BluetoothException("network subsystem failure!");
+			break;
+		case WSAEINPROGRESS:
+			throw BluetoothException("a blocking call is in progress!");
+			break;
+		case WSAENOTSOCK:
+			throw BluetoothException("socket isn't valid!");
+			break;
+		case WSAEFAULT:
+			throw BluetoothException("CRITICAL: count variable address invalid!");
+			break;
+		}
+		// invalidate the socket so the user can re-open it //
+		Close();
+	}
 	return count > 0;
 }
 
