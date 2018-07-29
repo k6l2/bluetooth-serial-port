@@ -99,7 +99,6 @@ void BTSerialPortBinding::Connect()
 		throw BluetoothException("Cannot connect: " + message);
 	}
 }
-
 void BTSerialPortBinding::Close()
 {
 	if (data->s != INVALID_SOCKET)
@@ -108,83 +107,105 @@ void BTSerialPortBinding::Close()
 		data->s = INVALID_SOCKET;
 	}
 }
-
 int BTSerialPortBinding::Read(char *buffer, int length)
 {
 	if (data->s == INVALID_SOCKET)
+	{
 		throw BluetoothException("connection has been closed");
-
+	}
 	if (buffer == nullptr)
+	{
 		throw BluetoothException("buffer cannot be null");
-
+	}
 	if (length == 0)
+	{
 		return 0;
-
+	}
 	fd_set set;
 	FD_ZERO(&set);
 	FD_SET(data->s, &set);
-
-	int size = -1;
-
-	const int iResult = select(
-		static_cast<int>(data->s) + 1, &set, nullptr, nullptr, timeoutRead);
+	//https://docs.microsoft.com/en-us/windows/desktop/api/winsock2/nf-winsock2-select
+	const int iResult = select(static_cast<int>(data->s) + 1,
+		&set, nullptr, nullptr, timeoutRead);
 	if (iResult == SOCKET_ERROR)
 	{
 		const int socketError = WSAGetLastError();
 		std::stringstream ss;
-		ss << "Socket error =" << socketError;
+		ss << "select FAILURE! Socket error =" << socketError;
 		Close();
 		throw BluetoothException(ss.str());
 	}
 	if (iResult == 0)
 	{
-		// if a timeout occurs, we consider the connection to be closed //
-		Close();
 		throw BluetoothException("time limit expired!");
 	}
-	else
+	if (FD_ISSET(data->s, &set))
 	{
-		if (FD_ISSET(data->s, &set))
+		//https://docs.microsoft.com/en-us/windows/desktop/api/winsock/nf-winsock-recv
+		int size = recv(data->s, buffer, length, 0);
+		if (size == 0)
 		{
-			size = recv(data->s, buffer, length, 0);
-		}
-		else 
-		{
-			// when no data is read from rfcomm the connection has been closed.
-			size = 0;
+			// when recv returns 0, that means the connection
+			//	has been gracefully closed
 			Close();
 		}
+		else if (size < 0)
+		{
+			const int socketError = WSAGetLastError();
+			std::stringstream ss;
+			ss << "recv FAILURE! Socket error =" << socketError;
+			Close();
+			throw BluetoothException(ss.str());
+		}
+		else
+		{
+			return size;
+		}
 	}
-
-	if (size < 0)
-		throw BluetoothException("Error reading from connection");
-
-	return size;
+	else 
+	{
+		// The socket descriptor is invalid, 
+		//	so assume the connection is closed.
+		Close();
+	}
+	return 0;
 }
-
-void BTSerialPortBinding::Write(const char *buffer, int length)
+int BTSerialPortBinding::Write(const char *buffer, int length)
 {
 	if (buffer == nullptr)
+	{
 		throw BluetoothException("buffer cannot be null");
-
+	}
 	if (length == 0)
-		return;
-
+	{
+		return 0;
+	}
 	if (data->s == INVALID_SOCKET)
+	{
 		throw BluetoothException("Attempting to write to a closed connection");
-
-	if (send(data->s, buffer, length, 0) != length)
-		throw BluetoothException("Writing attempt was unsuccessful");
+	}
+	// https://docs.microsoft.com/en-us/windows/desktop/api/winsock2/nf-winsock2-send
+	const int sentCount = send(data->s, buffer, length, 0);
+	if (sentCount == SOCKET_ERROR)
+	{
+		const int socketError = WSAGetLastError();
+		std::stringstream ss;
+		ss << "send FAILURE! Socket error =" << socketError;
+		Close();
+		throw BluetoothException(ss.str());
+	}
+	return sentCount;
 }
-
 bool BTSerialPortBinding::IsDataAvailable()
 {
 	if (data->s == INVALID_SOCKET)
+	{
 		throw BluetoothException("connection has been closed");
-
+	}
 	u_long count;
-	int iResult = ioctlsocket(data->s, FIONREAD, &count);
-	if (iResult != NO_ERROR)
+	//https://docs.microsoft.com/en-us/windows/desktop/api/winsock/nf-winsock-ioctlsocket
+	const int iResult = ioctlsocket(data->s, FIONREAD, &count);
+	if (iResult == SOCKET_ERROR)
 	{
 		// invalidate the socket so the user can re-open it //
 		Close();
