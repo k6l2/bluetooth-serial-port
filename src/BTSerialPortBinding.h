@@ -14,7 +14,7 @@ private:
 	//int readTimeout;
 	//int writeTimeout;
 	BTSerialPortBinding(std::string address, int channelID);
-	timeval* timeoutRead;
+	struct timeval* timeoutRead;
 public:
 	~BTSerialPortBinding();
 	static BTSerialPortBinding *Create(std::string address, int channelID);
